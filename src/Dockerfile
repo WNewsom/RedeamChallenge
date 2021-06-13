@@ -1,7 +1,6 @@
 FROM golang:1.16.5-buster
-ENV GO111MODULE=on
-RUN mkdr /app
+RUN mkdir /app
 ADD . /app
 WORKDIR /app
-RUN gobuild -0 main .
+RUN go build -o main .
 CMD ["/app/main"]
