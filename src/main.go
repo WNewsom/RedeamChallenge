@@ -1,5 +1,16 @@
 package main
 
+/*
+This is a simple RESTful API. It can Create, Update, Read, and Delete enteries to a csv file.
+
+DOCKER COMMANDS-
+
+docker build -t will-rest-api .
+docker run -p 80:80 -it will-rest-api
+
+*/
+
+//docker run -it -p 80:80
 import (
 	"encoding/csv"
 	"encoding/json"
@@ -13,13 +24,16 @@ import (
 	"sync"
 )
 
+/*
+The model for the books is given by this struct.
+*/
 type Book struct {
-	Title       string `json:"Title"`
-	Author      string `json:"Author"`
+	Title       string `json:"title"`
+	Author      string `json:"author"`
 	Publisher   string `json:"publisher"`
-	PublishDate string `json:"publishDate"` //In the format of MMDDYYYY
+	PublishDate string `json:"publishdate"` //In the format of MMDDYYYY
 	Rating      int    `json:"rating"`      // Measured on a scale of 1 - 3
-	IsCheckedIn bool   `json:"status"`      // True if checked in, false if cheched out
+	IsCheckedIn bool   `json:"ischeckedin"` // True if checked in, false if cheched out
 }
 
 var (
@@ -44,8 +58,13 @@ func main() {
 The csv file acts as the database behind the API. This will read the csv and then store the books in a slice.
 */
 func readFromFile(filepath string) {
-	f, _ := os.Open(filepath)
+	f, err := os.Open(filepath)
+	if err != nil {
+		log.Fatalln("File open failed", err)
+	}
 	r := csv.NewReader(f)
+	defer f.Close()
+	Books = nil
 	for {
 		record, err := r.Read()
 		if err == io.EOF {
@@ -54,12 +73,6 @@ func readFromFile(filepath string) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		// fmt.Println(record)
-		// fmt.Println(len(record))
-		// for value := range record {
-
-		// 	fmt.Printf("  %v\n", record[value])
-		// }
 		readRating, _ := strconv.Atoi(record[4])
 		readCheckIn, _ := strconv.ParseBool(record[5])
 		Books = append(Books, Book{Title: record[0], Author: record[1], Publisher: record[2], PublishDate: record[3], Rating: readRating, IsCheckedIn: readCheckIn})
@@ -67,6 +80,49 @@ func readFromFile(filepath string) {
 
 }
 
+/*
+Because deleting and editing the books can break some of the unit tests, the write to file function is commented out, but its here for future implementation.
+However, it higlights the problem with a csv file, and that its hard to write to and the simplest way is to rewrite the entire file. This isnt feasable for large operations, and a database would be better.
+*/
+
+func writeToFile(filepath string) {
+
+	f, err := os.Create(filepath)
+	if err != nil {
+		log.Fatalln("File open failed", err)
+	}
+	f.Seek(0, 0) //removing the content of the file
+
+	os.Truncate("books.csv", 0)
+	defer f.Close()
+	w := csv.NewWriter(f)
+	defer w.Flush()
+	var records [][]string
+
+	for _, book := range Books {
+		var bookData []string
+		bookData = append(bookData, book.Title)
+		bookData = append(bookData, book.Author)
+		bookData = append(bookData, book.Publisher)
+		bookData = append(bookData, book.PublishDate)
+		rat := strconv.Itoa(book.Rating)
+		bookData = append(bookData, rat)
+		check := strconv.FormatBool(book.IsCheckedIn)
+		bookData = append(bookData, check)
+		records = append(records, bookData)
+	}
+
+	for _, record := range records {
+		if err := w.Write(record); err != nil {
+			log.Fatalln("Error in writing to csv")
+		}
+	}
+
+}
+
+/*
+Returns all of the books stored. Only works with GET, and is part of the READ component of CRUD.
+*/
 func allEnteries(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 
@@ -79,15 +135,22 @@ func allEnteries(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/*
+This homepage will give a 404 error whenever a connection to an unused url is attepmted.
+*/
 func homePage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.Error(w, "404 not found", http.StatusNotFound)
 		return
 	}
 
-	fmt.Fprintf(w, "Welcome to the HomePage!")
+	fmt.Fprintf(w, "This is the Homepage")
 
 }
+
+/*
+This function serves as read, update, and delete components. One could read individual books with GET, update with PATCH, and delete with DELETE http methods.
+*/
 
 func returnSingleBook(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -124,6 +187,9 @@ func returnSingleBook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/*
+This fuction will delete the book with the given by the URL. If that book isnt in the list, it will return 404.
+*/
 func deleteBook(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/books/")
 
@@ -142,13 +208,18 @@ func deleteBook(w http.ResponseWriter, r *http.Request) {
 				Books = append(Books[:i], Books[i+1:]...)
 			}
 			fmt.Fprintf(w, "Book: "+idTest+" deleted!")
-			//TODO WRITE TO FILE
+			//writeToFile("books.csv")
 			mutex.Unlock()
 			return
 		}
 	}
 	http.Error(w, "404, not found.", http.StatusNotFound)
 }
+
+/*
+Updates books given by a PATCH request. Because all of the keys dont have to be present, the method must individualy check each to see if it is empty or not.
+If the data is invalid, it returns error code 400 and doesnt update the list.
+*/
 
 func patchBook(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/books/")
@@ -177,7 +248,8 @@ func patchBook(w http.ResponseWriter, r *http.Request) {
 				if len(r.FormValue("publishdate")) == 8 {
 					_, err := strconv.Atoi(r.FormValue("publishdate")) //Dont care about the integer value returned, just making sure that there are only numbers in the publishdate
 					if err != nil {
-						http.Error(w, "400, publishddate not correct", http.StatusBadRequest)
+						http.Error(w, "400, publishddate not correct, not an int", http.StatusBadRequest)
+						fmt.Printf("recieved %v", r.FormValue("publishdate"))
 						mutex.Unlock()
 						return
 					}
@@ -224,7 +296,7 @@ func patchBook(w http.ResponseWriter, r *http.Request) {
 
 				fmt.Printf("  %v\n", Books[value])
 			}
-			//TODO Update File
+			//writeToFile("books.csv")
 
 			mutex.Unlock()
 			return
@@ -271,6 +343,7 @@ func createNewBook(w http.ResponseWriter, r *http.Request) {
 		if len(r.FormValue("publishdate")) == 8 {
 			_, err := strconv.Atoi(r.FormValue("publishdate")) //Dont care about the integer value returned, just making sure that there are only numbers in the publishdate
 			if err != nil {
+				fmt.Printf("recieved %v", r.FormValue("publishdate"))
 				http.Error(w, "400, publishddate not correct", http.StatusBadRequest)
 				mutex.Unlock()
 				return
@@ -316,12 +389,7 @@ func createNewBook(w http.ResponseWriter, r *http.Request) {
 		*/
 		Books = append(Books, newBook)
 
-		// for value := range Books {
-
-		// 	fmt.Printf("  %v\n", Books[value])
-		// }
-
-		//TODO Write to csv
+		//writeToFile("books.csv")
 
 		w.WriteHeader(http.StatusCreated)
 
@@ -332,6 +400,9 @@ func createNewBook(w http.ResponseWriter, r *http.Request) {
 
 }
 
+/*
+The main method reads the csv file, and passes the functions to the handler
+*/
 func handleRequests() {
 	http.HandleFunc("/", homePage)
 	http.HandleFunc("/books", allEnteries)
